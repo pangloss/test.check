@@ -326,6 +326,13 @@
     (fn [rnd _size]
       (gen rnd n))))
 
+(defn add-size
+  "Create a new generator with `size` always increased by `n`."
+  [n {gen :gen}]
+  (make-gen
+    (fn [rnd size]
+      (gen rnd (+ n size)))))
+
 (defn choose
   "Create a generator that returns numbers in the range
   `min-range` to `max-range`, inclusive."
@@ -625,3 +632,25 @@
   "Like any, but avoids characters that the shell will interpret as actions,
   like 7 and 14 (bell and alternate character set command)"
   (sized (sized-container simple-type-printable)))
+
+(defprotocol LiteralGenerator
+  (literal* [this]))
+
+(defn literal [lit]
+  (cond
+    (generator? lit) lit
+    (satisfies? LiteralGenerator lit) (literal* lit)
+    (vector? lit) (apply tuple (mapv literal lit))
+    (map? lit) (fmap (partial into {}) (literal (mapv vec lit)))
+    (set? lit) (fmap set (literal (vec lit)))
+    (list? lit) (fmap (partial apply list) (literal (vec lit)))
+    :else (return lit)))
+
+(defn record->generator
+  ([record]
+   ; Is there a better way to do this?
+   (let [ctor (eval (read-string (str "map->" (last (clojure.string/split (str (class record)) #"\.")))))]
+     (record->generator ctor record)))
+  ([ctor record]
+   (fmap ctor (literal (into {} record)))))
+
