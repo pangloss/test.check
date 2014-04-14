@@ -129,7 +129,7 @@
   "See arguments to runner and gen-operations."
   [sim & stuff]
   `(let [sim# ~sim]
-     (simulator* sim# (gen-operations sim# @~stuff))))
+     (simulator* sim# (gen-operations sim# ~@stuff))))
 
 (comment
   ; Example code
@@ -218,20 +218,22 @@
                                                            (gen/elements (vec (keys regs)))])
                                               (gen/resize 1 gen/keyword))]]))))
 
-  (simulator
-    sim-config
-    [{:keys [pids regs] :as state}]
-    true       [:apply `spawn []]
-    (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
-    (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
-    true       [:apply `unreg [(if (seq regs)
-                                 (gen/one-of [(gen/resize 1 gen/keyword)
-                                              (gen/elements (vec (keys regs)))])
-                                 (gen/resize 1 gen/keyword))]]
-    true       [:apply `proc_reg/where [(if (seq regs)
-                                          (gen/one-of [(gen/resize 1 gen/keyword)
-                                                       (gen/elements (vec (keys regs)))])
-                                          (gen/resize 1 gen/keyword))]])
+  (tc/quick-check
+    10
+    (simulator
+      sim-config
+      [{:keys [pids regs] :as state}]
+      true       [:apply `spawn []]
+      (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
+      (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
+      true       [:apply `unreg [(if (seq regs)
+                                   (gen/one-of [(gen/resize 1 gen/keyword)
+                                                (gen/elements (vec (keys regs)))])
+                                   (gen/resize 1 gen/keyword))]]
+      true       [:apply `proc_reg/where [(if (seq regs)
+                                            (gen/one-of [(gen/resize 1 gen/keyword)
+                                                         (gen/elements (vec (keys regs)))])
+                                            (gen/resize 1 gen/keyword))]]))
 
   )
 
