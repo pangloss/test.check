@@ -28,29 +28,11 @@
 ; The next phase is actually running the commands. They are numbered the same, and when the actual results come in, they are
 ; delivered to the vars promises. When a var is referred to, it is dereferenced and the value is passed in to the command.
 
-
-; Like bind-helper, but first calls (k rnd size)... is this a terrible idea?
-(defn- bind2-helper
-  [k]
-  (fn [rose]
-    (gen/gen-fmap gen/join-rose
-              (gen/make-gen
-                (fn [rnd size]
-                  (gen/rose-fmap #(gen/call-gen % rnd size)
-                             (gen/rose-fmap (k rnd size) rose)))))))
-
-(defn bind2 [generator k]
-  (gen/gen-bind generator (bind2-helper k)))
-
-
-(defmacro state-command [state idx bindings commands rnd size]
+(defmacro state-command [state idx bindings commands]
   `(let [commands# (let [~(first bindings) ~state] ~(mapv (fn [[cond command]] `(when ~cond ~command)) commands))
          commands# (->> commands# (filter identity) vec)]
      (when (seq commands#)
-       (-> (nth commands# (mod ~idx (count commands#)))
-           gen/literal
-           (gen/call-gen ~rnd ~size)
-           first))))
+       (nth commands# (mod ~idx (count commands#))))))
 
 (defmacro gen-operations [sim bindings & commands]
   ; TODO: ensure presence of initial-state and next-state in sim
@@ -60,23 +42,22 @@
            next-state# (:next-state sim#)]
        (assert (fn? initial-state#) "Simulation must specify :initial-state function")
        (assert (fn? next-state#) "Simulation must specify :next-state function")
-       (bind2
+       (gen/bind
          ; each item is a vector of integers. Integers will be used modulo the size
          ; of the available command list for the current state.
          (gen/such-that not-empty (gen/vector gen/pos-int))
-         (fn [rnd# size#]
-           (fn [indices#]
-             (let [[result# state# counter#]
-                   (reduce (fn [[result# state# counter#] idx#]
-                             (let [var# (make-var counter#)
-                                   command# (state-command state# idx# ~bindings ~commands rnd# size#)
-                                   operation# [var# command#]]
-                               [(conj result# operation#)
-                                (next-state# state# command# var#)
-                                (inc counter#)]))
-                           [[] (initial-state#) 0]
-                           indices#)]
-               (gen/return result#))))))))
+         (fn [indices#]
+           (let [[result# state# counter#]
+                 (reduce (fn [[result# state# counter#] idx#]
+                           (let [var# (make-var counter#)
+                                 command# (state-command state# idx# ~bindings ~commands)
+                                 operation# [var# command#]]
+                             [(conj result# operation#)
+                              (next-state# state# command# var#)
+                              (inc counter#)]))
+                         [[] (initial-state#) 0]
+                         indices#)]
+             (gen/literal result#)))))))
 
 (defn eval-command [vars [method f args]]
   (try
@@ -184,6 +165,11 @@
            [[:apply `unreg [n]] [:sim/exit _]] (not (regs n))
            [[:apply `where [n]] _] (= (regs n) result)
            :else true))
+  (def sim-config
+    {:initial-state initial-state
+     :next-state next-state
+     :precondition precondition
+     :postcondition postcondition})
 
 
   (clojure.pprint/pprint
@@ -207,12 +193,6 @@
       1))
 
 
-
-  (def sim-config
-    {:initial-state initial-state
-     :next-state next-state
-     :precondition precondition
-     :postcondition postcondition})
 
   (pprint
     (gen/sample
