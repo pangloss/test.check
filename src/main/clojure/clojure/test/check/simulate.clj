@@ -45,7 +45,7 @@
        (gen/bind
          ; each item is a vector of integers. Integers will be used modulo the size
          ; of the available command list for the current state.
-         (gen/such-that not-empty (gen/vector gen/pos-int))
+         (gen/such-that not-empty (gen/vector (gen/no-shrink gen/pos-int)))
          (fn [indices#]
            (let [[result# state# counter#]
                  (reduce (fn [[result# state# counter#] idx#]
@@ -124,5 +124,7 @@
 (defmacro simulator
   "See arguments to runner and gen-operations."
   [sim & stuff]
-  `(let [sim# ~sim]
-     (simulator* sim# (gen-operations sim# ~@stuff))))
+  `(let [sim# ~sim
+         ops# (gen-operations sim# ~@stuff)]
+     (assoc (simulator* sim# ops#)
+            :gen-operations ops#)))
