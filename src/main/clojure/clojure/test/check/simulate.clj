@@ -2,6 +2,7 @@
   (:import (java.io Writer))
   (:require [clojure.pprint :refer [pprint]]
             [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :refer [for-all*]]
             [clojure.set :refer [map-invert]]))
 
 (defrecord Var [n]
@@ -38,10 +39,12 @@
             gen/sample-seq
             first))))
 
-(defmacro gen-states [sim bindings & commands]
+(defmacro gen-operations [sim bindings & commands]
   ; TODO: ensure presence of initial-state and next-state in sim
   (let [commands (partition 2 commands)]
-    `(let [{:keys [initial-state# next-state#]} ~sim]
+    `(let [sim# ~sim
+           initial-state# (:initial-state sim#)
+           next-state# (:next-state sim#)]
        (assert (fn? initial-state#) "Simulation must specify :initial-state function")
        (assert (fn? next-state#) "Simulation must specify :next-state function")
        (gen/bind
@@ -71,42 +74,42 @@
 (defn on-error [{:keys [error] :as data}]
   (throw (ex-info (str "Postcondition failed: " error) data)))
 
-(defn reduce-operation [{:keys [precondition next-state error?] :as sim}]
-  "Required: next-state
+(defn runner [{:keys [initial-state precondition next-state error?] :as sim}]
+  "Required: initial-state next-state
    Optional:
+     reduce - allows you to switch between reduce and reductions
      precondition - default to no precondition
      error? - default to no checks for bad state after command execution and state transition
-     on-error - default uses on-error function which throws ex-info
-     eval-command - default uses eval-command function"
+     on-error - default throws ex-info
+     eval-command - [:apply `f [:as args]] -> (apply f args)"
+  (assert (fn? initial-state) "Simulation must specify :initial-state function")
   (assert (fn? next-state) "Simulation must specify :next-state function")
   (let [eval-command (get sim :eval-command eval-command)
-        on-error (get sim :on-error on-error)]
-    (fn [[vars state] [v command]]
-      (if (or (not precondition) (precondition state command))
-        (let [result (eval-command vars command)
-              vars (assoc vars v result)
-              state' (next-state state command result)
-              error (when error? (error? state` command result))]
-          (if error
-            (on-error {:error error :var v :vars vars :operations operations
-                       :pre-state s :post-state s' :command command :result result})
-            [vars state']))
-        [vars state]))))
+        on-error (get sim :on-error on-error)
+        reduce (get sim :reduce reduce)
+        vars (atom {})]
+    (fn [operations]
+      (reduce
+        (fn [state [v command]]
+          (if (or (not precondition) (precondition state command))
+            (let [result (eval-command @vars command)
+                  state' (next-state state command result)
+                  error (when error? (error? state` command result))]
+              (swap! vars assoc v result)
+              (if error
+                (on-error {:error error :var v :vars @vars :operations operations
+                           :pre-state state :post-state state' :command command :result result})
+                state'))
+            state))
+        (initial-state)
+        operations))))
 
-(defn run-operations [{:keys [initial-state] :as sim} operations]
-  "Required: initial-state
-   Optional:
-     reduce-operation - defaults to reduce-operation"
-  (reduce
-    ((get sim :reduce-operation reduce-operation) sim)
-    [{} (initial-state)]
-    operations))
+(defn simulator* [sim sim-gen]
+  (for-all* [sim-gen] (runner sim)))
 
-(defmacro simulate [sim bindings & pairs]
-  ())
-
-
-
+(defmacro simulator [sim & stuff]
+  `(let [sim# ~sim]
+     (simulator* sim# (gen-operations sim# @~stuff))))
 
 (comment
   ; Example code
@@ -114,13 +117,11 @@
   (use '[clojure.walk :only [macroexpand-all]])
   (require '[clojure.test.check :as tc])
   (require '[clojure.core.match :refer [match]])
-
   (defrecord State [^java.util.Set pids
                     ^java.util.Map regs
                     ^java.util.Set killed])
   (defn initial-state []
     (State. #{} {} #{}))
-
   ; result is a black box because it may be a result or it may be a var object
   ; when generating tests. Args that are generated from results are the same.
   (defn next-state [{:keys [killed regs] :as state} command result]
@@ -138,32 +139,24 @@
            :else (do (println "Unmatched command:")
                      (prn command)
                      state)))
+  (defn precondition [state command]
+    true)
+  (defn error? [{:keys [regs]} command result]
+    (match [command result]
+           [[:apply `reg [n pid]] true] (not (regs n))
+           [[:apply `reg [n pid]] [:sim/exit _]] (regs n)
+           [[:apply `unreg [n]] true] (regs n)
+           [[:apply `unreg [n]] [:sim/exit _]] (not (regs n))
+           [[:apply `where [n]] _] (= (regs n) result)
+           :else true))
 
-  (simulate
-    {:initial-state initial-state
-     :next-state next-state
-     :precondition precondition
-     :error? error?}
-    [{:keys [pids regs] :as state}]
-    true       [:apply `spawn []]
-    (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
-    (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
-    true       [:apply `unreg [(if (seq regs)
-                                 (gen/one-of [(gen/resize 1 gen/keyword)
-                                              (gen/elements (vec (keys regs)))])
-                                 (gen/resize 1 gen/keyword))]]
-    true       [:apply `proc_reg/where [(if (seq regs)
-                                          (gen/one-of [(gen/resize 1 gen/keyword)
-                                                       (gen/elements (vec (keys regs)))])
-                                          (gen/resize 1 gen/keyword))]])
 
   (clojure.pprint/pprint
     (gen/sample
       (gen/add-size
         50
-        (gen-states
-          {:initial-state initial-state
-           :next-state next-state}
+        (gen-operations
+          sim-config
           [{:keys [pids regs] :as state}]
           true       [:apply `spawn []]
           (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
@@ -180,14 +173,43 @@
 
 
 
-  (defn precondition [state command]
-    true)
-  (defn error? [{:keys [regs]} command result]
-    (match [command result]
-           [[:apply `reg [n pid]] true] (not (regs n))
-           [[:apply `reg [n pid]] [:sim/exit _]] (regs n)
-           [[:apply `unreg [n]] true] (regs n)
-           [[:apply `unreg [n]] [:sim/exit _]] (not (regs n))
-           [[:apply `where [n]] _] (= (regs n) result)
-           :else true)))
+  (def sim-config
+    {:initial-state initial-state
+     :next-state next-state
+     :precondition precondition
+     :error? error?})
+
+  (simulator*
+    sim-config
+    (gen-operations
+      sim-config
+      [{:keys [pids regs] :as state}]
+      true       [:apply `spawn []]
+      (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
+      (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
+      true       [:apply `unreg [(if (seq regs)
+                                   (gen/one-of [(gen/resize 1 gen/keyword)
+                                                (gen/elements (vec (keys regs)))])
+                                   (gen/resize 1 gen/keyword))]]
+      true       [:apply `proc_reg/where [(if (seq regs)
+                                            (gen/one-of [(gen/resize 1 gen/keyword)
+                                                         (gen/elements (vec (keys regs)))])
+                                            (gen/resize 1 gen/keyword))]]))
+
+  (simulator
+    sim-config
+    [{:keys [pids regs] :as state}]
+    true       [:apply `spawn []]
+    (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
+    (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
+    true       [:apply `unreg [(if (seq regs)
+                                 (gen/one-of [(gen/resize 1 gen/keyword)
+                                              (gen/elements (vec (keys regs)))])
+                                 (gen/resize 1 gen/keyword))]]
+    true       [:apply `proc_reg/where [(if (seq regs)
+                                          (gen/one-of [(gen/resize 1 gen/keyword)
+                                                       (gen/elements (vec (keys regs)))])
+                                          (gen/resize 1 gen/keyword))]])
+
+  )
 
