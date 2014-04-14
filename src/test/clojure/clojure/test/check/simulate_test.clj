@@ -21,7 +21,7 @@
     {:initial-state
      (fn [] {:contents {} :transient false})
      :precondition
-     (fn [{:keys [transient]} [_ f _]]
+     (fn [{:keys [transient]} [f _]]
        (condp = f
          (`conj `disj `transient) (not transient)
          (`conj! `disj! `persistent!) transient
@@ -31,15 +31,15 @@
        (let [state (assoc state :target result)]
          (match
            command
-           [_ `make-set _] state
-           [_ `transient [_]] (assoc state :transient true)
-           [_ `persistent! [_]] (assoc state :transient false)
-           [_ `conj [_ v]] (update-in state [:contents] assoc v true)
-           [_ `disj [_ v]] (update-in state [:contents] dissoc v)
-           [_ `conj! [_ v]] (update-in state [:contents] assoc v true)
-           [_ `disj! [_ v]] (update-in state [:contents] dissoc v))))
+           [`make-set _] state
+           [`transient [_]] (assoc state :transient true)
+           [`persistent! [_]] (assoc state :transient false)
+           [`conj [_ v]] (update-in state [:contents] assoc v true)
+           [`disj [_ v]] (update-in state [:contents] dissoc v)
+           [`conj! [_ v]] (update-in state [:contents] assoc v true)
+           [`disj! [_ v]] (update-in state [:contents] dissoc v))))
      :error?
-     (fn [{:keys [contents] :as state} [_ f [target arg]] result]
+     (fn [{:keys [contents] :as state} [f [target arg]] result]
        (if (not= (count result) (count contents))
          "Counts not equal"
          (condp = f
@@ -54,16 +54,22 @@
            (when (transient? result) "Result should not be transient")
            nil))) }
     [{:keys [target contents transient]}]
-    (not target) [:apply `make-set []]
-    (and target (not transient)) [:apply `conj [target gen/int]]
-    (and target (not transient) (seq contents)) [:apply `disj [target (gen/elements (vec (keys contents)))]]
-    (and target (not transient)) [:apply `transient [target]]
-    (and target transient) [:apply `persistent! [target]]
-    (and target transient) [:apply `conj! [target gen/int]]
-    (and target transient (seq contents)) [:apply `disj! [target (gen/elements (vec (keys contents)))]]))
+    (not target) [`make-set []]
+    (and target (not transient)) [`conj [target gen/int]]
+    (and target (not transient) (seq contents)) [`disj [target (gen/elements (vec (keys contents)))]]
+    (and target (not transient)) [`transient [target]]
+    (and target transient) [`persistent! [target]]
+    (and target transient) [`conj! [target gen/int]]
+    (and target transient (seq contents)) [`disj! [target (gen/elements (vec (keys contents)))]]))
 
 
 (defspec transient-state-test 10000 test-set)
+
+(comment
+
+  (tc/quick-check 1000 test-set)
+
+  )
 
 
 ; =======================================================================================
@@ -78,49 +84,49 @@
    :next-state
    (fn next-state [{:keys [killed regs] :as state} command result]
      (match command
-            [:apply `spawn _] (update-in state [:pids] conj result)
-            [:apply `kill [pid]] (-> state
-                                     (update-in [:killed] conj pid)
-                                     (update-in [:regs] #(dissoc % ((map-invert %) pid))))
-            [:apply `reg [n pid]] (if (and (not (killed pid))
-                                           (not (regs n)))
-                                    (assoc-in state [:regs n] pid)
-                                    state)
-            [:apply `unreg [n]] (update-in state [:regs] dissoc n)
-            [:apply `proc_reg/where [n]] state
+            [`spawn _] (update-in state [:pids] conj result)
+            [`kill [pid]] (-> state
+                              (update-in [:killed] conj pid)
+                              (update-in [:regs] #(dissoc % ((map-invert %) pid))))
+            [`reg [n pid]] (if (and (not (killed pid))
+                                    (not (regs n)))
+                             (assoc-in state [:regs n] pid)
+                             state)
+            [`unreg [n]] (update-in state [:regs] dissoc n)
+            [`proc_reg/where [n]] state
             :else (do (println "Unmatched command:")
                       (prn command)
                       state)))
    :postcondition
    (fn postcondition [{:keys [regs]} command result]
      (match [command result]
-            [[:apply `reg [n pid]] true] (not (regs n))
-            [[:apply `reg [n pid]] [:sim/exit _]] (regs n)
-            [[:apply `unreg [n]] true] (regs n)
-            [[:apply `unreg [n]] [:sim/exit _]] (not (regs n))
-            [[:apply `where [n]] _] (= (regs n) result)
+            [[`reg [n pid]] true] (not (regs n))
+            [[`reg [n pid]] [:sim/exit _]] (regs n)
+            [[`unreg [n]] true] (regs n)
+            [[`unreg [n]] [:sim/exit _]] (not (regs n))
+            [[`where [n]] _] (= (regs n) result)
             :else true))})
 
 
-  ; result is a black box because it may be a result or it may be a var object
-  ; when generating tests. Args that are generated from results are the same.
+; result is a black box because it may be a result or it may be a var object
+; when generating tests. Args that are generated from results are the same.
 
 
 (def sim-gen
   (gen-operations
     sim-config
     [{:keys [pids regs] :as state}]
-    true       [:apply `spawn []]
-    (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
-    (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
-    true       [:apply `unreg [(if (seq regs)
-                                 (gen/one-of [(gen/resize 1 gen/keyword)
-                                              (gen/elements (vec (keys regs)))])
-                                 (gen/resize 1 gen/keyword))]]
-    true       [:apply `proc_reg/where [(if (seq regs)
-                                          (gen/one-of [(gen/resize 1 gen/keyword)
-                                                       (gen/elements (vec (keys regs)))])
-                                          (gen/resize 1 gen/keyword))]]))
+    true       [`spawn []]
+    (seq pids) [`kill  [(gen/elements (vec pids))]]
+    (seq pids) [`reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
+    true       [`unreg [(if (seq regs)
+                          (gen/one-of [(gen/resize 1 gen/keyword)
+                                       (gen/elements (vec (keys regs)))])
+                          (gen/resize 1 gen/keyword))]]
+    true       [`proc_reg/where [(if (seq regs)
+                                   (gen/one-of [(gen/resize 1 gen/keyword)
+                                                (gen/elements (vec (keys regs)))])
+                                   (gen/resize 1 gen/keyword))]]))
 
 
 (comment

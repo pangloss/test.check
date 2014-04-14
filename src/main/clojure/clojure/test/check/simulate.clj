@@ -59,11 +59,10 @@
                          indices#)]
              (gen/literal result#)))))))
 
-(defn eval-command [vars [method f args]]
+(defn eval-command [vars [f args]]
   (try
-    (condp = method
-      ; TODO:  search deeper within the structure for vars to replace.
-      :apply (apply (eval f) (map #(if (instance? Var %) (get vars %) %) args)))
+    ; TODO:  search deeper within the structure for vars to replace.
+    (apply (eval f) (map #(if (instance? Var %) (get vars %) %) args))
     (catch Throwable t t)))
 
 (defn on-error [{:keys [error] :as data}]
@@ -92,7 +91,7 @@
    Optional behaviour configuration:
      reduce - allows you to switch between reduce and reductions
      on-error - default throws ex-info
-     eval-command - [:apply `f [:as args]] -> (apply f args)"
+     eval-command - [`f [:as args]] -> (apply f args)"
   [{:keys [initial-state precondition next-state error? postcondition] :as sim}]
   (assert (fn? initial-state) "Simulation must specify :initial-state function")
   (assert (fn? next-state) "Simulation must specify :next-state function")
