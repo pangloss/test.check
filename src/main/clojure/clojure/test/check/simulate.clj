@@ -74,18 +74,35 @@
 (defn on-error [{:keys [error] :as data}]
   (throw (ex-info (str "Postcondition failed: " error) data)))
 
-(defn runner [{:keys [initial-state precondition next-state error?] :as sim}]
+(defn error? [state command result]
+  (when (instance? Throwable result)
+    (.message result)))
+
+(defn runner
   "Required: initial-state next-state
    Optional:
-     reduce - allows you to switch between reduce and reductions
      precondition - default to no precondition
+     postcondition - default to no checks for bad state after command execution and state transition
      error? - default to no checks for bad state after command execution and state transition
+   _
+   If included, precondition must return true for the command to be executed. It's
+   useful for general state checks and also to validate functions when shrinking and some
+   setup may have been removed.
+   _
+   postcondition or error? are interchangeable. error? allows you to return an
+   actual error message, while postcondition just returns true if the state is
+   ok, which is easier to write!
+   _
+   Optional behaviour configuration:
+     reduce - allows you to switch between reduce and reductions
      on-error - default throws ex-info
      eval-command - [:apply `f [:as args]] -> (apply f args)"
+  [{:keys [initial-state precondition next-state error? postcondition] :as sim}]
   (assert (fn? initial-state) "Simulation must specify :initial-state function")
   (assert (fn? next-state) "Simulation must specify :next-state function")
   (let [eval-command (get sim :eval-command eval-command)
         on-error (get sim :on-error on-error)
+        error? (get sim :error? error?)
         reduce (get sim :reduce reduce)
         vars (atom {})]
     (fn [operations]
@@ -94,9 +111,10 @@
           (if (or (not precondition) (precondition state command))
             (let [result (eval-command @vars command)
                   state' (next-state state command result)
-                  error (when error? (error? state` command result))]
+                  failed (when postcondition (not (postcondition state' command result)))
+                  error (error? state' command result)]
               (swap! vars assoc v result)
-              (if error
+              (if (or error failed)
                 (on-error {:error error :var v :vars @vars :operations operations
                            :pre-state state :post-state state' :command command :result result})
                 state'))
@@ -107,7 +125,9 @@
 (defn simulator* [sim sim-gen]
   (for-all* [sim-gen] (runner sim)))
 
-(defmacro simulator [sim & stuff]
+(defmacro simulator
+  "See arguments to runner and gen-operations."
+  [sim & stuff]
   `(let [sim# ~sim]
      (simulator* sim# (gen-operations sim# @~stuff))))
 
@@ -141,7 +161,7 @@
                      state)))
   (defn precondition [state command]
     true)
-  (defn error? [{:keys [regs]} command result]
+  (defn postcondition [{:keys [regs]} command result]
     (match [command result]
            [[:apply `reg [n pid]] true] (not (regs n))
            [[:apply `reg [n pid]] [:sim/exit _]] (regs n)
@@ -177,24 +197,26 @@
     {:initial-state initial-state
      :next-state next-state
      :precondition precondition
-     :error? error?})
+     :postcondition postcondition})
 
-  (simulator*
-    sim-config
-    (gen-operations
+  (pprint
+    (gen/sample
+    (simulator*
       sim-config
-      [{:keys [pids regs] :as state}]
-      true       [:apply `spawn []]
-      (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
-      (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
-      true       [:apply `unreg [(if (seq regs)
-                                   (gen/one-of [(gen/resize 1 gen/keyword)
-                                                (gen/elements (vec (keys regs)))])
-                                   (gen/resize 1 gen/keyword))]]
-      true       [:apply `proc_reg/where [(if (seq regs)
-                                            (gen/one-of [(gen/resize 1 gen/keyword)
-                                                         (gen/elements (vec (keys regs)))])
-                                            (gen/resize 1 gen/keyword))]]))
+      (gen-operations
+        sim-config
+        [{:keys [pids regs] :as state}]
+        true       [:apply `spawn []]
+        (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
+        (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
+        true       [:apply `unreg [(if (seq regs)
+                                     (gen/one-of [(gen/resize 1 gen/keyword)
+                                                  (gen/elements (vec (keys regs)))])
+                                     (gen/resize 1 gen/keyword))]]
+        true       [:apply `proc_reg/where [(if (seq regs)
+                                              (gen/one-of [(gen/resize 1 gen/keyword)
+                                                           (gen/elements (vec (keys regs)))])
+                                              (gen/resize 1 gen/keyword))]]))))
 
   (simulator
     sim-config
