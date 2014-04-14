@@ -1,20 +1,17 @@
 (ns clojure.test.check.simulate
   (:import (java.io Writer))
-  (:require
+  (:require [clojure.pprint :refer [pprint]]
             [clojure.test.check.generators :as gen]
             [clojure.set :refer [map-invert]]))
 
-(defrecord Var [n value]
+(defrecord Var [n]
   gen/LiteralGenerator
   (literal* [this] (gen/return this)))
-(defn make-var
-  ([n] (Var. n (promise)))
-  ([n value] (Var. n (deliver (promise) value))))
+(defn make-var [n]
+  (Var. n))
 
 (defmethod print-method Var [{:keys [value n]} , ^Writer w]
-  (.write w (if (realized? value)
-              (str "(V " n ", " (pr-str @value) ")")
-              (str "(V " n ")"))))
+  (.write w (str "(V " n ")")))
 (let [^clojure.lang.MultiFn f clojure.pprint/simple-dispatch]
   (.addMethod f Var pr))
 (def V make-var)
@@ -41,22 +38,73 @@
             gen/sample-seq
             first))))
 
-(defmacro gen-states [init-state next-state bindings & commands]
+(defmacro gen-states [sim bindings & commands]
+  ; TODO: ensure presence of initial-state and next-state in sim
   (let [commands (partition 2 commands)]
-    `(gen/bind
-       ; each item is a vector of integers. Integers will be used modulo the size
-       ; of the available command list for the current state.
-       (gen/such-that not-empty (gen/vector gen/pos-int))
-       (fn [indices#]
-         (let [[result# state# counter#]
-               (reduce (fn [[result# state# counter#] idx#]
-                         (let [command# (state-command state# idx# ~bindings ~commands counter#)]
-                           [(conj result# command#)
-                            (~next-state state# command# (make-var counter#))
-                            (inc counter#)]))
-                       [[] (~init-state) 0]
-                       indices#)]
-           (gen/return result#))))))
+    `(let [{:keys [initial-state# next-state#]} ~sim]
+       (assert (fn? initial-state#) "Simulation must specify :initial-state function")
+       (assert (fn? next-state#) "Simulation must specify :next-state function")
+       (gen/bind
+         ; each item is a vector of integers. Integers will be used modulo the size
+         ; of the available command list for the current state.
+         (gen/such-that not-empty (gen/vector gen/pos-int))
+         (fn [indices#]
+           (let [[result# state# counter#]
+                 (reduce (fn [[result# state# counter#] idx#]
+                           (let [var# (make-var counter#)
+                                 command# (state-command state# idx# ~bindings ~commands counter#)
+                                 operation# [var# command#]]
+                             [(conj result# operation#)
+                              (next-state# state# command# var#)
+                              (inc counter#)]))
+                         [[] (initial-state#) 0]
+                         indices#)]
+             (gen/return result#)))))))
+
+(defn eval-command [vars [method f args]]
+  (try
+    (condp = method
+      ; TODO:  search deeper within the structure for vars to replace.
+      :apply (eval (apply list f (map #(if (instance? Var %) (get vars %) %) args))))
+    (catch Throwable t t)))
+
+(defn on-error [{:keys [error] :as data}]
+  (throw (ex-info (str "Postcondition failed: " error) data)))
+
+(defn reduce-operation [{:keys [precondition next-state error?] :as sim}]
+  "Required: next-state
+   Optional:
+     precondition - default to no precondition
+     error? - default to no checks for bad state after command execution and state transition
+     on-error - default uses on-error function which throws ex-info
+     eval-command - default uses eval-command function"
+  (assert (fn? next-state) "Simulation must specify :next-state function")
+  (let [eval-command (get sim :eval-command eval-command)
+        on-error (get sim :on-error on-error)]
+    (fn [[vars state] [v command]]
+      (if (or (not precondition) (precondition state command))
+        (let [result (eval-command vars command)
+              vars (assoc vars v result)
+              state' (next-state state command result)
+              error (when error? (error? state` command result))]
+          (if error
+            (on-error {:error error :var v :vars vars :operations operations
+                       :pre-state s :post-state s' :command command :result result})
+            [vars state']))
+        [vars state]))))
+
+(defn run-operations [{:keys [initial-state] :as sim} operations]
+  "Required: initial-state
+   Optional:
+     reduce-operation - defaults to reduce-operation"
+  (reduce
+    ((get sim :reduce-operation reduce-operation) sim)
+    [{} (initial-state)]
+    operations))
+
+(defmacro simulate [sim bindings & pairs]
+  ())
+
 
 
 
@@ -66,6 +114,7 @@
   (use '[clojure.walk :only [macroexpand-all]])
   (require '[clojure.test.check :as tc])
   (require '[clojure.core.match :refer [match]])
+
   (defrecord State [^java.util.Set pids
                     ^java.util.Map regs
                     ^java.util.Set killed])
@@ -90,25 +139,44 @@
                      (prn command)
                      state)))
 
+  (simulate
+    {:initial-state initial-state
+     :next-state next-state
+     :precondition precondition
+     :error? error?}
+    [{:keys [pids regs] :as state}]
+    true       [:apply `spawn []]
+    (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
+    (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
+    true       [:apply `unreg [(if (seq regs)
+                                 (gen/one-of [(gen/resize 1 gen/keyword)
+                                              (gen/elements (vec (keys regs)))])
+                                 (gen/resize 1 gen/keyword))]]
+    true       [:apply `proc_reg/where [(if (seq regs)
+                                          (gen/one-of [(gen/resize 1 gen/keyword)
+                                                       (gen/elements (vec (keys regs)))])
+                                          (gen/resize 1 gen/keyword))]])
+
   (clojure.pprint/pprint
-    (take 1 (drop 50 (gen/sample-seq
-      (gen-states
-        initial-state
-        next-state
-        [{:keys [pids regs] :as state}]
-        true       [:apply `spawn []]
-        (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
-        (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
-        true       [:apply `unreg [(if (seq regs)
-                                     (gen/one-of [(gen/resize 1 gen/keyword)
-                                                  (gen/elements (vec (keys regs)))])
-                                     (gen/resize 1 gen/keyword))]]
-        true       [:apply `proc_reg/where [(if (seq regs)
-                                              (gen/one-of [(gen/resize 1 gen/keyword)
-                                                           (gen/elements (vec (keys regs)))])
-                                              (gen/resize 1 gen/keyword))]]
-        )
-                       ))))
+    (gen/sample
+      (gen/add-size
+        50
+        (gen-states
+          {:initial-state initial-state
+           :next-state next-state}
+          [{:keys [pids regs] :as state}]
+          true       [:apply `spawn []]
+          (seq pids) [:apply `kill  [(gen/elements (vec pids))]]
+          (seq pids) [:apply `reg [(gen/resize 1 gen/keyword) (gen/elements (vec pids))]]
+          true       [:apply `unreg [(if (seq regs)
+                                       (gen/one-of [(gen/resize 1 gen/keyword)
+                                                    (gen/elements (vec (keys regs)))])
+                                       (gen/resize 1 gen/keyword))]]
+          true       [:apply `proc_reg/where [(if (seq regs)
+                                                (gen/one-of [(gen/resize 1 gen/keyword)
+                                                             (gen/elements (vec (keys regs)))])
+                                                (gen/resize 1 gen/keyword))]]))
+      1))
 
 
 
@@ -121,43 +189,5 @@
            [[:apply `unreg [n]] true] (regs n)
            [[:apply `unreg [n]] [:sim/exit _]] (not (regs n))
            [[:apply `where [n]] _] (= (regs n) result)
-           :else true))
-  (defn runner []
-    (run-commands (initial-state) next-command next-state precondition error?))
+           :else true)))
 
-  )
-
-
-(comment
-  ; possibly needed...
-
-  (defn exec-command [state command]
-    (match command
-           [:apply f args]
-           {:result (eval (apply list f (map #(if (:var (meta %)) (% state) %) args)))
-            :state state}
-           [:set v subcommand]
-           (let [result (:result (exec-command state subcommand))]
-             {:state (update-in state [:var v] result)
-              :result result})))
-
-  (defn run-commands [initial next-command next-state precondition postcondition]
-    'ok)
-
-
-
-  (defn simulate-actions [s coll actions]
-    (reduce
-      (fn [[s value] [action arg]]
-        (if (pre action s)
-          (let [result (next-value action s value arg)
-                s' (next-state action s value arg) ]
-            (if-let [error (error? action s' result arg)]
-              (throw (ex-info (str "Postcondition failed: " error)
-                              {:pre-state s :post-state s' :action action :arg arg
-                               :value value :result result}))
-              [s' result]))
-          [s value]))
-      [s coll]
-      actions))
-  )
