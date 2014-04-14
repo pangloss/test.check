@@ -34,6 +34,22 @@
      (when (seq commands#)
        (nth commands# (mod ~idx (count commands#))))))
 
+; current:
+
+; generate list of ints
+; bind that to the state transformer which creates commands
+; - the state machine is given unevaluated generators which does not work well (undo tree...)
+; the rose tree is based on the command indices rather than the generated commands
+
+; should:
+
+; generate list of ints
+; use state machine to turn that into list of (gen/literal operations)
+; build a rose tree (with my own shrink algorithm? (first shrink command list, then shrink args))
+
+; search spaces were manageable in original naive version so it is possible. Don't completely
+; understand why my search space is so large...
+
 (defmacro gen-operations [sim bindings & commands]
   ; TODO: ensure presence of initial-state and next-state in sim
   (let [commands (partition 2 commands)]
