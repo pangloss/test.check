@@ -98,12 +98,12 @@
                                           (next-state state command var)
                                           (reduced nil)))
                                       (assoc (initial-state) :shrink true)
-                                      operations))))
-               ; Hopefully this does the following:
-               ; each rose should be [operations [less operations ...
-               ;                                  shrunk operations ...]]
-               ; first shrink by number of commands. If we pass all of those, shrink by operations
-               (rose/zip vector selected-roses))))
+                                      operations)))
+                 ; Hopefully this does the following:
+                 ; each rose should be [operations [less operations ...
+                 ;                                  shrunk operations ...]]
+                 ; first shrink by number of commands. If we pass all of those, shrink by operations
+                 (rose/zip vector selected-roses)))))
          rose/join
          (rose/filter identity))))
 
