@@ -147,22 +147,27 @@
 (defn eval-command [target vars [method f args]]
   (try
     ; TODO:  search deeper within the structure for vars to replace.
-    (let [f (eval f)
-          args (map #(if (instance? Var %) (get vars %) %) args)]
-      (condp = method
-        :apply (apply f args)
-        :-> (apply f target args)
-        :->> (apply f (concat args [target]))
-        :custom (f target vars args)))
+    (let [f' (if (and (not= :custom method) (symbol? f))
+               (eval f)
+               f)
+          args (mapv #(if (instance? Var %) (get vars %) %) args)]
+      [(condp = method
+         :apply (apply f' args)
+         :-> (apply f' target args)
+         :->> (apply f' (concat args [target]))
+         :custom (target vars [f args]))
+       [method f args]])
     (catch Throwable t t)))
 
-(defn on-error [{:keys [error] :as data}]
-  #_(println "Error detected: " error)
-  #_(pprint (select-keys data [:var :fail :post-state :target :result]))
-  (throw (ex-info (if error
-                    (str "Error detected: " error)
-                    "Postcondition failed")
-                  (select-keys data [:var :post-state :target :result]))))
+(defn on-error [{:keys [error cause] :as data}]
+  (let [message (cond
+                  error (str "Error detected: " error)
+                  (instance? Throwable cause) (str "Simulation exception: " (.getMessage ^Throwable cause))
+                  :else "Postcondition failed")
+        data (select-keys data [:var :state :target :result :command])]
+    (if cause
+      (throw (ex-info message data cause))
+      (throw (ex-info message data)))))
 
 (defn error? [state command result]
   (when (instance? Throwable result)
@@ -199,19 +204,36 @@
     (fn [operations]
       (reduce
         (fn [[state target :as ignore] [v command]]
-          (if (or (not precondition) (precondition state command))
-            (let [result (eval-command target @vars command)
-                  state' (next-state state command result)
-                  failed (when postcondition (not (postcondition state' command result)))
-                  error (error? state' command result)]
-              (swap! vars assoc v result)
-              (if (or error failed)
-                (on-error {:error error :var v :vars @vars :fail operations
-                           :pre-state state :post-state state' :command command :target target :result result})
-                [state' result]))
-            ignore))
+          (try
+            (if (or (not precondition) (precondition state command))
+              (let [[result command'] (eval-command target @vars command)
+                    state' (next-state state command' result)]
+                (try
+                  (let [failed (when postcondition (not (postcondition state' command' result)))
+                        error (error? state' command' result)]
+                    (swap! vars assoc v result)
+                    (if (or error failed)
+                      (on-error {:error error :var v :vars @vars :fail operations
+                                 :pre-state state :state state'
+                                 :pre-command command :command command'
+                                 :target target :result result})
+                      [state' result]))
+                  (catch Throwable t
+                    (if (:state (ex-data t))
+                      (throw t)
+                      (on-error {:var v :vars @vars :fail operations
+                                 :pre-state state :state state'
+                                 :pre-command command :command command'
+                                 :target target :result result :cause t})))))
+              ignore)
+            (catch Throwable t
+              (if (:state (ex-data t))
+                (throw t)
+                (on-error {:var v :vars @vars :fail operations :state state
+                           :command command :target target :cause t})))))
         [(initial-state) (initial-target)]
-        operations))))
+        operations)
+      )))
 
 (defn simulator* [sim sim-gen]
   (for-all* [sim-gen] (runner sim)))
