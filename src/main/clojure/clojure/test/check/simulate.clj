@@ -3,7 +3,8 @@
   (:require [clojure.pprint :refer [pprint]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :refer [for-all*]]
-            [clojure.test.check.rose-tree :as rose]))
+            [clojure.test.check.rose-tree :as rose]
+            [clojure.math.combinatorics :refer [subsets]]))
 
 (defrecord Var [n]
   gen/LiteralGenerator
@@ -56,7 +57,35 @@
 (defn get-var* [op-rose]
   (first (rose/root op-rose)))
 
+(defn shrink-operations* [{:keys [initial-state precondition next-state]} op-roses]
+  ; Build a custom rose tree that more effectively searches the space
+  ; - search pairs then triples, etc.
+  ; - relative sequence is preserved
+  ; - discard combinations where a var used by one command is not available
+  ; - understand preconditions and skip compositions with failing ones
+  ; - shrink size before changing any arguments
+  (let [size (count op-roses)]
+    [(map rose/root op-roses)
+     (for [indices (subsets (range (count op-roses)))
+           :when (> size (count indices) 0)
+           :let [selected-roses (map #(nth op-roses %) indices)
+                 operations (map rose/root selected-roses)
+                 available-var (set (map first operations))
+                 commands (map second operations)
+                 used-vars (filter #(instance? Var %) (tree-seq coll? seq commands))]
+           :when (every? available-var used-vars)
+           :when (or (not precondition)
+                     (reduce (fn [state [var command]]
+                               (if (precondition state command)
+                                 (next-state state command var)
+                                 (reduced nil)))
+                             (initial-state)
+                             operations))]
+       (rose/zip vector selected-roses))]))
+
 (defmacro gen-operations [sim bindings & commands]
+  ; TODO:
+  ; - Allow a literal prefix of commands for setup to be passed in. Never shrunk.
   (let [commands (partition 2 commands)]
     `(let [sim# ~sim
            initial-state# (:initial-state sim#)
@@ -83,15 +112,7 @@
                               (inc counter#)]))
                          [[] (initial-state#) 0]
                          indices#)]
-             ; Here I could build a custom rose tree that more effectively searches the space
-             ; - I should understand a setup prefix if needed
-             ; - search pairs then triples, etc.
-             ; - relative sequence is preserved
-             ; - understand preconditions and skip compositions with failing ones?
-             ; - shrink size before changing any arguments
-             ;
-             ; FIXME: Add command list shrinking. rose/zip should only be used at the branch level against each branch permutation:
-             (rose/zip vector op-roses#)))))))
+             (shrink-operations* sim# op-roses#)))))))
 
 (defn eval-command [vars [f args]]
   (try

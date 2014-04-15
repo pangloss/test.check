@@ -3,7 +3,8 @@
   :url "https://github.com/clojure/test.check"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [
+  :dependencies [[org.clojure/math.combinatorics "0.0.7"]
+
                  ; only for DW's testing... don't include!
                  [org.clojure/core.match "0.2.1"]
                  ]
