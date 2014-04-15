@@ -40,21 +40,23 @@
          [_ `conj! [v]] (update-in state [:contents] assoc v true)
          [_ `disj! [v]] (update-in state [:contents] dissoc v)))
      :error?
-     (fn error? [{:keys [contents] :as state} [_ f [_ arg]] result]
+     (fn error? [{:keys [contents] :as state} [_ f [arg]] result]
        (when (set? result)
-         (if (not= (count result) (count contents))
-           (str "Counts not equal: " (count result) " != " (count contents))
-           (condp = f
-             (`conj `conj!)
-             (cond (not (result arg)) "Argument should be present in the result"
-                   (incorrect? state result) "Expected state does not match result")
-             (`disj `disj!)
-             (when (incorrect? state result) "Expected state does not match result")
-             `transient
-             (when (not (transient? result)) "Result should be transient")
-             `persistent!
-             (when (transient? result) "Result should not be transient")
-             nil))))}
+         (condp = f
+           `conj
+           (cond (not (result arg)) (str "Argument `" arg "` should be present in the result")
+                 (incorrect? state result) "Expected state does not match result")
+           `conj!
+           (cond (not (result arg)) (str "Argument `" arg "` should be present in the result")
+                 (incorrect? state result) "Expected state does not match result")
+           `disj
+           (when (incorrect? state result) "Expected state does not match result")
+           `disj!
+           (when (incorrect? state result) "Expected state does not match result")
+           `transient
+           (when (not (transient? result)) "Result should be transient")
+           `persistent!
+           (when (transient? result) "Result should not be transient"))))}
     [{:keys [contents t?]}]
     (not t?) [:-> `conj [gen/int]]
     (and (not t?) (seq contents)) [:-> `disj [(gen/elements (vec (keys contents)))]]
