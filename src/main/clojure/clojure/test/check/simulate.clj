@@ -3,7 +3,7 @@
   (:require [clojure.pprint :refer [pprint]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :refer [for-all*]]
-            ))
+            [clojure.test.check.rose-tree :as rose]))
 
 (defrecord Var [n]
   gen/LiteralGenerator
@@ -50,30 +50,48 @@
 ; search spaces were manageable in original naive version so it is possible. Don't completely
 ; understand why my search space is so large...
 
+(defn get-command* [op-rose]
+  (second (rose/root op-rose)))
+
+(defn get-var* [op-rose]
+  (first (rose/root op-rose)))
+
 (defmacro gen-operations [sim bindings & commands]
-  ; TODO: ensure presence of initial-state and next-state in sim
   (let [commands (partition 2 commands)]
     `(let [sim# ~sim
            initial-state# (:initial-state sim#)
            next-state# (:next-state sim#)]
        (assert (fn? initial-state#) "Simulation must specify :initial-state function")
        (assert (fn? next-state#) "Simulation must specify :next-state function")
-       (gen/bind
-         ; each item is a vector of integers. Integers will be used modulo the size
-         ; of the available command list for the current state.
-         (gen/such-that not-empty (gen/vector (gen/no-shrink gen/pos-int)))
-         (fn [indices#]
-           (let [[result# state# counter#]
+       (gen/make-gen
+         (fn [rnd# size#]
+           ; cycle size within 5 and 55 for the command list
+           (let [gen-indices# (->> gen/pos-int gen/no-shrink gen/vector gen/no-shrink
+                                   (gen/such-that not-empty)
+                                   (gen/add-size 5) (gen/mod-size 50))
+                 indices# (rose/root (gen/call-gen gen-indices# rnd# size#))
+                 [op-roses# _# _#]
                  (reduce (fn [[result# state# counter#] idx#]
                            (let [var# (make-var counter#)
                                  command# (state-command state# idx# ~bindings ~commands)
-                                 operation# [var# command#]]
-                             [(conj result# operation#)
-                              (next-state# state# command# var#)
+                                 ; keep the rose for each command and mix it into the rose generator below the
+                                 ; list pairing operations
+                                 operation# [var# command#]
+                                 operation-rose# (gen/call-gen (gen/literal operation#) rnd# size#)]
+                             [(conj result# operation-rose#)
+                              (next-state# state# (get-command* operation-rose#) var#)
                               (inc counter#)]))
                          [[] (initial-state#) 0]
                          indices#)]
-             (gen/literal result#)))))))
+             ; Here I could build a custom rose tree that more effectively searches the space
+             ; - I should understand a setup prefix if needed
+             ; - search pairs then triples, etc.
+             ; - relative sequence is preserved
+             ; - understand preconditions and skip compositions with failing ones?
+             ; - shrink size before changing any arguments
+             ;
+             ; FIXME: Add command list shrinking. rose/zip should only be used at the branch level against each branch permutation:
+             (rose/zip vector op-roses#)))))))
 
 (defn eval-command [vars [f args]]
   (try

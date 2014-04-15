@@ -134,9 +134,9 @@
   ; FIXME: not all generators are being evaluated...
   (clojure.pprint/pprint
     (gen/sample
-      (gen/add-size
-        50
-        sim-gen)
-      1))
+      sim-gen
+      10))
+
+  (gen/call-gen sim-gen (gen/random) 0)
 
   )

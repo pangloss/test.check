@@ -198,6 +198,13 @@
     (fn [rnd size]
       (gen rnd (+ n size)))))
 
+(defn mod-size
+  "Create a new generator were `size` rotates through a number field of size `n`"
+  [n {gen :gen}]
+  (make-gen
+    (fn [rnd size]
+      (gen rnd (mod size n)))))
+
 (defn choose
   "Create a generator that returns numbers in the range
   `min-range` to `max-range`, inclusive."
