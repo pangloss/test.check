@@ -127,8 +127,12 @@
     (catch Throwable t t)))
 
 (defn on-error [{:keys [error] :as data}]
-  (throw (ex-info (str "Postcondition failed: " error)
-                  (select-keys data [:var :operations :post-state]))))
+  (println "Error detected: " error)
+  (pprint (select-keys data [:var :operations :post-state :target :result]))
+  (throw (ex-info (if error
+                    (str "Error detected: " error)
+                    "Postcondition failed")
+                  (select-keys data [:var :operations :post-state :target :result]))))
 
 (defn error? [state command result]
   (when (instance? Throwable result)
@@ -173,7 +177,7 @@
               (swap! vars assoc v result)
               (if (or error failed)
                 (on-error {:error error :var v :vars @vars :operations operations
-                           :pre-state state :post-state state' :command command :result result})
+                           :pre-state state :post-state state' :command command :target target :result result})
                 [state' result]))
             ignore))
         [(initial-state) (initial-target)]
