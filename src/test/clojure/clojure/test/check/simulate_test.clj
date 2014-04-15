@@ -64,7 +64,7 @@
     (and t? (seq contents)) [:-> `disj! [(gen/elements (vec (keys contents)))]]))
 
 
-(defspec transient-state-test 10000 test-set)
+(defspec transient-state-test 1000 test-set)
 
 (comment
 

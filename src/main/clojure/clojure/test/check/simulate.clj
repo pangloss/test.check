@@ -110,7 +110,8 @@
   (let [commands (partition 2 commands)]
     `(let [sim# ~sim
            initial-state# (:initial-state sim#)
-           next-state# (:next-state sim#)]
+           next-state# (:next-state sim#)
+           max-op-size# (:max-size sim# 50)]
        (assert (fn? initial-state#) "Simulation must specify :initial-state function")
        (assert (fn? next-state#) "Simulation must specify :next-state function")
        (gen/make-gen
@@ -126,7 +127,7 @@
                                  ; keep the rose for each command and mix it into the rose generator below the
                                  ; list pairing operations
                                  operation# [var# command#]
-                                 operation-rose# (gen/call-gen (gen/literal operation#) rnd# size#)]
+                                 operation-rose# (gen/call-gen (gen/literal operation#) rnd# (mod size# max-op-size#))]
                              [(conj op-roses# operation-rose#)
                               (next-state# state# (get-command* operation-rose#) var#)
                               (inc counter#)]))
@@ -148,11 +149,11 @@
 
 (defn on-error [{:keys [error] :as data}]
   #_(println "Error detected: " error)
-  #_(pprint (select-keys data [:var :operations :post-state :target :result]))
+  #_(pprint (select-keys data [:var :fail :post-state :target :result]))
   (throw (ex-info (if error
                     (str "Error detected: " error)
                     "Postcondition failed")
-                  (select-keys data [:var :operations :post-state :target :result]))))
+                  (select-keys data [:var :post-state :target :result]))))
 
 (defn error? [state command result]
   (when (instance? Throwable result)
@@ -196,7 +197,7 @@
                   error (error? state' command result)]
               (swap! vars assoc v result)
               (if (or error failed)
-                (on-error {:error error :var v :vars @vars :operations operations
+                (on-error {:error error :var v :vars @vars :fail operations
                            :pre-state state :post-state state' :command command :target target :result result})
                 [state' result]))
             ignore))
