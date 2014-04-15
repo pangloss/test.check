@@ -178,7 +178,7 @@
      reduce - allows you to switch between reduce and reductions
      on-error - default throws ex-info
      eval-command - [`f [:as args]] -> (apply f args)"
-  [{:keys [initial-state precondition next-state error? postcondition] :as sim}]
+  [{:keys [initial-state precondition next-state postcondition] :as sim}]
   (assert (fn? initial-state) "Simulation must specify :initial-state function")
   (assert (fn? next-state) "Simulation must specify :next-state function")
   (let [eval-command (get sim :eval-command eval-command)
