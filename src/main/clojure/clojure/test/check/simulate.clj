@@ -4,7 +4,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :refer [for-all*]]
             [clojure.test.check.rose-tree :as rose]
-            [clojure.math.combinatorics :refer [subsets]]))
+            [clojure.math.combinatorics :refer [combinations]]))
 
 (defrecord Var [n]
   gen/LiteralGenerator
@@ -57,6 +57,20 @@
 (defn get-var* [op-rose]
   (first (rose/root op-rose)))
 
+(defn- unchunk
+  "Borrowed from math.combinatorics"
+  [s]
+  (lazy-seq
+   (when (seq s)
+     (cons (first s) (unchunk (rest s))))))
+
+(defn subsets-rose [items]
+  [items
+   (mapcat (fn [n]
+             (map (comp subsets-rose vec)
+                  (combinations items n)))
+           (unchunk (reverse (range 1 (count items)))))])
+
 (defn shrink-operations* [{:keys [initial-state precondition next-state]} op-roses]
   ; Build a custom rose tree that more effectively searches the space
   ; - search pairs then triples, etc.
@@ -65,23 +79,29 @@
   ; - understand preconditions and skip compositions with failing ones
   ; - shrink size before changing any arguments
   (let [size (count op-roses)]
-    [(map rose/root op-roses)
-     (for [indices (subsets (range (count op-roses)))
-           :when (> size (count indices) 0)
-           :let [selected-roses (mapv #(nth op-roses %) indices)
-                 operations (map rose/root selected-roses)
-                 available-var (set (map first operations))
-                 commands (map second operations)
-                 used-vars (filter #(instance? Var %) (tree-seq coll? seq commands))]
-           :when (every? available-var used-vars)
-           :when (or (not precondition)
-                     (reduce (fn [state [var command]]
-                               (if (precondition state command)
-                                 (next-state state command var)
-                                 (reduced nil)))
-                             (assoc (initial-state) :shrink true)
-                             operations))]
-       (rose/zip vector selected-roses))]))
+    (->> (subsets-rose (range (count op-roses)))
+         (rose/fmap
+           (fn [indices]
+             (let [selected-roses (mapv #(nth op-roses %) indices)
+                   operations (map rose/root selected-roses)
+                   available-var (set (map first operations))
+                   commands (map second operations)
+                   used-vars (filter #(instance? Var %) (tree-seq coll? seq commands))]
+               (when (and (every? available-var used-vars)
+                          (or (not precondition)
+                              (reduce (fn [state [var command]]
+                                        (if (precondition state command)
+                                          (next-state state command var)
+                                          (reduced nil)))
+                                      (assoc (initial-state) :shrink true)
+                                      operations))))
+               ; Hopefully this does the following:
+               ; each rose should be [operations [smaller operations ...
+               ;                                           shrunk operations ...]]
+               ; first shrink by number of commands. If we pass all of those, shrink by operations
+               (rose/zip vector selected-roses))))
+         rose/join
+         (rose/filter identity))))
 
 (defmacro gen-operations [sim bindings & commands]
   ; TODO:
@@ -127,8 +147,8 @@
     (catch Throwable t t)))
 
 (defn on-error [{:keys [error] :as data}]
-  (println "Error detected: " error)
-  (pprint (select-keys data [:var :operations :post-state :target :result]))
+  #_(println "Error detected: " error)
+  #_(pprint (select-keys data [:var :operations :post-state :target :result]))
   (throw (ex-info (if error
                     (str "Error detected: " error)
                     "Postcondition failed")
