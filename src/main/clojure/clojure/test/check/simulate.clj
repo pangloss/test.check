@@ -68,7 +68,7 @@
     [(map rose/root op-roses)
      (for [indices (subsets (range (count op-roses)))
            :when (> size (count indices) 0)
-           :let [selected-roses (map #(nth op-roses %) indices)
+           :let [selected-roses (mapv #(nth op-roses %) indices)
                  operations (map rose/root selected-roses)
                  available-var (set (map first operations))
                  commands (map second operations)
@@ -79,13 +79,14 @@
                                (if (precondition state command)
                                  (next-state state command var)
                                  (reduced nil)))
-                             (initial-state)
+                             (assoc (initial-state) :shrink true)
                              operations))]
        (rose/zip vector selected-roses))]))
 
 (defmacro gen-operations [sim bindings & commands]
   ; TODO:
   ; - Allow a literal prefix of commands for setup to be passed in. Never shrunk.
+  (assert (even? (count commands)) "Incorrect condition command pair.")
   (let [commands (partition 2 commands)]
     `(let [sim# ~sim
            initial-state# (:initial-state sim#)
@@ -96,28 +97,33 @@
          (fn [rnd# size#]
            ; cycle size within 5 and 55 for the command list
            (let [gen-indices# (->> gen/pos-int gen/no-shrink gen/vector gen/no-shrink
-                                   (gen/such-that not-empty)
-                                   (gen/add-size 5) (gen/mod-size 50))
+                                   (gen/such-that not-empty))
                  indices# (rose/root (gen/call-gen gen-indices# rnd# size#))
                  [op-roses# _# _#]
-                 (reduce (fn [[result# state# counter#] idx#]
+                 (reduce (fn [[op-roses# state# counter#] idx#]
                            (let [var# (make-var counter#)
                                  command# (state-command state# idx# ~bindings ~commands)
                                  ; keep the rose for each command and mix it into the rose generator below the
                                  ; list pairing operations
                                  operation# [var# command#]
                                  operation-rose# (gen/call-gen (gen/literal operation#) rnd# size#)]
-                             [(conj result# operation-rose#)
+                             [(conj op-roses# operation-rose#)
                               (next-state# state# (get-command* operation-rose#) var#)
                               (inc counter#)]))
                          [[] (initial-state#) 0]
                          indices#)]
              (shrink-operations* sim# op-roses#)))))))
 
-(defn eval-command [vars [f args]]
+(defn eval-command [target vars [method f args]]
   (try
     ; TODO:  search deeper within the structure for vars to replace.
-    (apply (eval f) (map #(if (instance? Var %) (get vars %) %) args))
+    (let [f (eval f)
+          args (map #(if (instance? Var %) (get vars %) %) args)]
+      (condp = method
+        :apply (apply f args)
+        :-> (apply f target args)
+        :->> (apply f (concat args [target]))
+        :custom (f target vars args)))
     (catch Throwable t t)))
 
 (defn on-error [{:keys [error] :as data}]
@@ -153,13 +159,14 @@
   (let [eval-command (get sim :eval-command eval-command)
         on-error (get sim :on-error on-error)
         error? (get sim :error? error?)
+        initial-target (get sim :initial-target (constantly nil))
         reduce (get sim :reduce reduce)
         vars (atom {})]
     (fn [operations]
       (reduce
-        (fn [state [v command]]
+        (fn [[state target :as ignore] [v command]]
           (if (or (not precondition) (precondition state command))
-            (let [result (eval-command @vars command)
+            (let [result (eval-command target @vars command)
                   state' (next-state state command result)
                   failed (when postcondition (not (postcondition state' command result)))
                   error (error? state' command result)]
@@ -167,9 +174,9 @@
               (if (or error failed)
                 (on-error {:error error :var v :vars @vars :operations operations
                            :pre-state state :post-state state' :command command :result result})
-                state'))
-            state))
-        (initial-state)
+                [state' result]))
+            ignore))
+        [(initial-state) (initial-target)]
         operations))))
 
 (defn simulator* [sim sim-gen]
