@@ -19,15 +19,17 @@
 (def V make-var)
 
 ; when generating commands, we use the state machine, we don't run the commands, but rather use a "result" proxy like (Var. 1)
-; that we pass to next-state as if it were a result. The state machine does what it needs with those vars (if anything). So we
-; might have (State. #{(Var. 1) (Var. 2)} {:x (Var. 1)}) when the commands are finished being generated. Because some of the
-; commands are generated from the state, they generate may have some of the vars embedded in them.
+; that we pass to next-state as if it were a result. The state machine may
+; store those vars to use them for future command generation or verification.
+; So we might have (State. #{(Var. 1) (Var. 2)} {:x (Var. 1)}) after some
+; commands have been generated.  Because some of the commands are generated
+; from the state, they may have some of the vars embedded in them.
 
-; Each command has its number attached to it, so that if they are shrunk, the
-; numbers don't change.
+; Each command has its number attached to it. If they are shrunk, the numbers don't change.
 ;
-; The next phase is actually running the commands. They are numbered the same, and when the actual results come in, they are
-; delivered to the vars promises. When a var is referred to, it is dereferenced and the value is passed in to the command.
+; The next phase is actually running the commands. They are numbered the same,
+; and when the actual results come in, they are associated to the vars. The
+; vars are replaced in the command arguments before execution.
 
 (defmacro state-command [state idx bindings commands]
   `(let [commands# (let [~(first bindings) ~state] ~(mapv (fn [[cond command]] `(when ~cond ~command)) commands))
@@ -35,27 +37,8 @@
      (when (seq commands#)
        (nth commands# (mod ~idx (count commands#))))))
 
-; current:
-
-; generate list of ints
-; bind that to the state transformer which creates commands
-; - the state machine is given unevaluated generators which does not work well (undo tree...)
-; the rose tree is based on the command indices rather than the generated commands
-
-; should:
-
-; generate list of ints
-; use state machine to turn that into list of (gen/literal operations)
-; build a rose tree (with my own shrink algorithm? (first shrink command list, then shrink args))
-
-; search spaces were manageable in original naive version so it is possible. Don't completely
-; understand why my search space is so large...
-
 (defn get-command* [op-rose]
   (second (rose/root op-rose)))
-
-(defn get-var* [op-rose]
-  (first (rose/root op-rose)))
 
 (defn- unchunk
   "Borrowed from math.combinatorics"
@@ -96,13 +79,21 @@
                                       (assoc (initial-state) :shrink true)
                                       operations))))
                ; Hopefully this does the following:
-               ; each rose should be [operations [smaller operations ...
-               ;                                           shrunk operations ...]]
+               ; each rose should be [operations [less operations ...
+               ;                                  shrunk operations ...]]
                ; first shrink by number of commands. If we pass all of those, shrink by operations
                (rose/zip vector selected-roses))))
          rose/join
          (rose/filter identity))))
 
+; - generate a vector of positive ints
+; - inside the state loop, working through those ints:
+;   - generate a command corresponding to the int given the current state.
+;   - the command may have generators embedded.
+;   - Turn the command into its own rose tree so that the command's arguments can be shrunk.
+;   - use the root version of the command to progress to the next state
+; - we now have a list of rose trees, one for each command.
+; - combine those commands into one rose tree for this test which follows the ideas set out in shrink-operations*
 (defmacro gen-operations [sim bindings & commands]
   ; TODO:
   ; - Allow a literal prefix of commands for setup to be passed in. Never shrunk.
@@ -116,7 +107,6 @@
        (assert (fn? next-state#) "Simulation must specify :next-state function")
        (gen/make-gen
          (fn [rnd# size#]
-           ; cycle size within 5 and 55 for the command list
            (let [gen-indices# (->> gen/pos-int gen/no-shrink gen/vector gen/no-shrink
                                    (gen/such-that not-empty))
                  indices# (rose/root (gen/call-gen gen-indices# rnd# size#))
@@ -124,8 +114,6 @@
                  (reduce (fn [[op-roses# state# counter#] idx#]
                            (let [var# (make-var counter#)
                                  command# (state-command state# idx# ~bindings ~commands)
-                                 ; keep the rose for each command and mix it into the rose generator below the
-                                 ; list pairing operations
                                  operation# [var# command#]
                                  operation-rose# (gen/call-gen (gen/literal operation#) rnd# (mod size# max-op-size#))]
                              [(conj op-roses# operation-rose#)
