@@ -8,7 +8,7 @@
             [clojure.test.check.clojure-test :as ct :refer (defspec)]))
 
 (defn incorrect? [s result]
-  (when-not (:transient s)
+  (when-not (:t? s)
     (not= (into #{} (keys (:contents s))) result)))
 
 (defn transient?  [x]
@@ -17,20 +17,24 @@
 (def test-set
   (simulator
     {:initial-state
-     (fn initial-state [] {:contents {} :transient false})
+     (fn initial-state [] {:contents {} :t? false})
      :initial-target
      (fn initial-target [] #{})
      :precondition
-     (fn pre [{:keys [shrink transient]} [_ f _]]
-       (cond
-         (#{`conj `disj `transient} f) (not transient)
-         (#{`conj! `disj! `persistent!} f) transient))
+     (fn pre [{:keys [shrink t?]} [_ f _]]
+       (condp = f
+         `conj        (not t?)
+         `disj        (not t?)
+         `transient   (not t?)
+         `conj!       t?
+         `disj!       t?
+         `persistent! t?))
      :next-state
      (fn next-state [state command result]
        (match
          command
-         [_ `transient []] (assoc state :transient true)
-         [_ `persistent! []] (assoc state :transient false)
+         [_ `transient []] (assoc state :t? true)
+         [_ `persistent! []] (assoc state :t? false)
          [_ `conj [v]] (update-in state [:contents] assoc v true)
          [_ `disj [v]] (update-in state [:contents] dissoc v)
          [_ `conj! [v]] (update-in state [:contents] assoc v true)
@@ -51,13 +55,13 @@
              `persistent!
              (when (transient? result) "Result should not be transient")
              nil))))}
-    [{:keys [contents transient]}]
-    (not transient) [:-> `conj [(gen/resize 10 gen/int)]]
-    (and (not transient) (seq contents)) [:-> `disj [(gen/elements (vec (keys contents)))]]
-    (not transient) [:-> `transient []]
-    transient [:-> `persistent! []]
-    transient [:-> `conj! [(gen/resize 10 gen/int)]]
-    (and transient (seq contents)) [:-> `disj! [(gen/elements (vec (keys contents)))]]))
+    [{:keys [contents t?]}]
+    (not t?) [:-> `conj [gen/int]]
+    (and (not t?) (seq contents)) [:-> `disj [(gen/elements (vec (keys contents)))]]
+    (not t?) [:-> `transient []]
+    t? [:-> `persistent! []]
+    t? [:-> `conj! [gen/int]]
+    (and t? (seq contents)) [:-> `disj! [(gen/elements (vec (keys contents)))]]))
 
 
 (defspec transient-state-test 10000 test-set)
