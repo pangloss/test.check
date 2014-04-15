@@ -18,18 +18,39 @@
   (.addMethod f Var pr))
 (def V make-var)
 
-; when generating commands, we use the state machine, we don't run the commands, but rather use a "result" proxy like (Var. 1)
-; that we pass to next-state as if it were a result. The state machine may
-; store those vars to use them for future command generation or verification.
-; So we might have (State. #{(Var. 1) (Var. 2)} {:x (Var. 1)}) after some
-; commands have been generated.  Because some of the commands are generated
-; from the state, they may have some of the vars embedded in them.
+; Simulation runs in 2 phases. First we generate command lists, then we execute
+; them. The state machine is used during both phases, first to enable
+; generation of commands that affect previous results, then to validate actual
+; results against simulated state.
 
-; Each command has its number attached to it. If they are shrunk, the numbers don't change.
+; When generating commands, we call next-state on state machine without
+; executing any command. In place of that command's result, we use a Var
+; instance which the state may treat as a black box representing the result.
+; The state machine may store those vars to use them for future command
+; generation or verification.  So we might have (MyState. #{(Var. 1) (Var. 2)}
+; {:x (Var. 1)}) after some commands have been generated.
+
+; Each var is numbered and permanantly associated to its command. Even when
+; some commands are removed during shrinking, the var numbers associated with
+; the command will not change.
 ;
-; The next phase is actually running the commands. They are numbered the same,
-; and when the actual results come in, they are associated to the vars. The
-; vars are replaced in the command arguments before execution.
+; Once a test is completely generated, it is passed to the runner which
+; executes each command, this time passing the actual result of running the
+; command to the state machine's `next-state` as well as `postcondition` or
+; `error?` functions. Any vars in commands must refer to previously executed
+; statements, and so before that statement is executed, any vars in the command
+; are replaced with the corresponding value.
+;
+; If an exception is thrown or the `error?` or `postcondition` functions
+; indicate a bad state, the test has failed and now moves into the shrinking
+; stage.
+;
+; When shrinking, we first minimize the number of commands needed to reproduce,
+; then attempt to shrink the arguments those commands are given. To do that we
+; again use the state machine. Each command subset is validated to ensure that
+; all vars a command refers to will exist in the subset, then to ensure that
+; the state preconditions should be expected to pass. This can greatly reduce
+; the number of invalid tests generated.
 
 (defmacro state-command [state idx bindings commands]
   `(let [commands# (let [~(first bindings) ~state] ~(mapv (fn [[cond command]] `(when ~cond ~command)) commands))
