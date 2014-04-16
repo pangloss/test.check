@@ -44,10 +44,10 @@
        (when (set? result)
          (condp = f
            `conj
-           (cond (not (result arg)) (str "Argument `" arg "` should be present in the result")
+           (cond (not= arg (result arg)) (str "Argument `" arg "` should be present in the result")
                  (incorrect? state result) "Expected state does not match result")
            `conj!
-           (cond (not (result arg)) (str "Argument `" arg "` should be present in the result")
+           (cond (not= arg (result arg)) (str "Argument `" arg "` should be present in the result")
                  (incorrect? state result) "Expected state does not match result")
            `disj
            (when (incorrect? state result) "Expected state does not match result")
@@ -66,7 +66,8 @@
     (and t? (seq contents)) [:-> `disj! [(gen/elements (vec (keys contents)))]]))
 
 
-(defspec transient-state-test 1000 test-set)
+; With size > 100, this will almost certainly fail on Clojure 1.5.1:
+(defspec transient-state-test 200 test-set)
 
 (comment
 
@@ -77,6 +78,8 @@
 
 ; =======================================================================================
 ; =======================================================================================
+; This example is reproducing an example from erlang and isn't meant to be run beyond
+; just generating the tests.
 
 (defrecord State [^java.util.Set pids
                   ^java.util.Map regs
