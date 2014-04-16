@@ -45,6 +45,11 @@
 ; indicate a bad state, the test has failed and now moves into the shrinking
 ; stage.
 ;
+; If a command throws an exception, the error? and postcondition functions can
+; also accept that as valid. In that case, the keep-result-var? function should
+; usually return false so that subsequent operations are skipped if they expect
+; there to be a valid result in that var position.
+;
 ; When shrinking, we first minimize the number of commands needed to reproduce,
 ; then attempt to shrink the arguments those commands are given. To do that we
 ; again use the state machine. Each command subset is validated to ensure that
@@ -79,6 +84,9 @@
                   (combinations items n)))
            (unchunk (reverse (range 1 (count items)))))])
 
+(defn extract-vars [root]
+  (filter #(instance? Var %) (tree-seq coll? seq root)))
+
 (defn shrink-operations* [{:keys [initial-state precondition next-state]} op-roses]
   ; Build a custom rose tree that more effectively searches the space
   ; - search pairs then triples, etc.
@@ -93,10 +101,10 @@
            (fn [indices]
              (let [selected-roses (mapv #(nth op-roses %) indices)
                    operations (map rose/root selected-roses)
-                   available-var (conj (set (map first operations)) init-var)
+                   available-vars (conj (set (map first operations)) init-var)
                    commands (map second operations)
-                   used-vars (filter #(instance? Var %) (tree-seq coll? seq commands))]
-               (when (and (every? available-var used-vars)
+                   used-vars (extract-vars commands)]
+               (when (and (every? available-vars used-vars)
                           (or (not precondition)
                               (reduce (fn [state [var command]]
                                         (if (precondition state command)
@@ -178,6 +186,13 @@
   (when (instance? Throwable result)
     (.getMessage ^Throwable result)))
 
+(defn keep-result-var?
+  "When a method would be expected to give a bad result which is not a failure,
+   you don't want subsequent tests to fail because the result of this expression
+   is invalid. This method can control that."
+  [state command result]
+  (not (instance? Throwable result)))
+
 (defn runner
   "Required: initial-state next-state
    Optional:
@@ -195,6 +210,7 @@
    _
    Optional behaviour configuration:
      reduce - allows you to switch between reduce and reductions
+     keep-result-var? - defaults that any Throwable is not to be stored in a Var
      on-error - default throws ex-info
      eval-command - [`f [:as args]] -> (apply f args)"
   [{:keys [initial-state precondition next-state postcondition] :as sim}]
@@ -204,6 +220,7 @@
         on-error (get sim :on-error on-error)
         error? (get sim :error? error?)
         initial-target (get sim :initial-target (constantly nil))
+        keep-result-var? (get sim :keep-result-var? keep-result-var?)
         reduce (get sim :reduce reduce)]
     (fn [operations]
       (let [init-target (initial-target)
@@ -211,28 +228,33 @@
         (reduce
           (fn [[state target :as ignore] [v command]]
             (try
-              (if (or (not precondition)
-                      (precondition state command))
-                (let [[result command'] (eval-command target @vars command)
-                      state' (next-state state command' result)]
-                  (try
-                    (let [failed (when postcondition (not (postcondition state' command' result)))
-                          error (error? state' command' result)]
-                      (swap! vars assoc v result)
-                      (if (or error failed)
-                        (on-error {:error error :var v :vars @vars :fail operations
-                                   :pre-state state :state state'
-                                   :pre-command command :command command'
-                                   :target target :result result})
-                        [state' result]))
-                    (catch Throwable t
-                      (if (:state (ex-data t))
-                        (throw t)
-                        (on-error {:var v :vars @vars :fail operations
-                                   :pre-state state :state state'
-                                   :pre-command command :command command'
-                                   :target target :result result :cause t})))))
-                ignore)
+              (let [used-vars (extract-vars command)
+                    available-vars (set (keys @vars))]
+                (if (and (every? available-vars used-vars)
+                         (or (not precondition)
+                             (precondition state command)))
+                  (let [[result command'] (eval-command target @vars command)
+                        keep? (keep-result-var? state command' result)
+                        state' (next-state state command' result)]
+                    (try
+                      (let [failed (when postcondition (not (postcondition state' command' result)))
+                            error (error? state' command' result)]
+                        (when keep?
+                          (swap! vars assoc v result))
+                        (if (or error failed)
+                          (on-error {:error error :var v :vars @vars :fail operations
+                                     :pre-state state :state state'
+                                     :pre-command command :command command'
+                                     :target target :result result})
+                          [state' result]))
+                      (catch Throwable t
+                        (if (:state (ex-data t))
+                          (throw t)
+                          (on-error {:var v :vars @vars :fail operations
+                                     :pre-state state :state state'
+                                     :pre-command command :command command'
+                                     :target target :result result :cause t})))))
+                  ignore))
               (catch Throwable t
                 (if (:state (ex-data t))
                   (throw t)
