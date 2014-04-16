@@ -102,7 +102,7 @@
                                         (if (precondition state command)
                                           (next-state state command var)
                                           (reduced nil)))
-                                      (assoc (initial-state) :shrink true)
+                                      (assoc (initial-state) ::shrink true)
                                       operations)))
                  ; Hopefully this does the following:
                  ; each rose should be [operations [less operations ...
@@ -238,7 +238,7 @@
                   (throw t)
                   (on-error {:var v :vars @vars :fail operations :state state
                              :command command :target target :cause t})))))
-          [(initial-state) init-target]
+          [(assoc (initial-state) ::run true) init-target]
           operations)))))
 
 (defn simulator* [sim sim-gen]
