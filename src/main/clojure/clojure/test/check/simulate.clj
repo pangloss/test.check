@@ -157,9 +157,14 @@
                          indices#)]
              (shrink-operations* sim# op-roses#)))))))
 
+(defn tmap? [c]
+  (and (coll? %) (not (instance? clojure.lang.IRecord %))))
+
 (defn tmap [f c]
-  (into (or (empty c) [])
-        (map #(if (coll? %) (tmap f %) (f %)) c)))
+  (if (tmap? c)
+    (into (or (empty c) [])
+          (map #(if (tmap? %) (tmap f %) (f %)) c))
+    c))
 
 (defn prepare-command [target vars [method f args]]
   [method f (tmap #(if (instance? Var %) (get vars %) %) args)])
