@@ -158,7 +158,7 @@
              (shrink-operations* sim# op-roses#)))))))
 
 (defn tmap? [c]
-  (and (coll? %) (not (instance? clojure.lang.IRecord %))))
+  (and (coll? c) (not (instance? clojure.lang.IRecord c))))
 
 (defn tmap [f c]
   (if (tmap? c)
@@ -284,3 +284,32 @@
          ops# (gen-operations sim# ~@stuff)]
      (assoc (simulator* sim# ops#)
             :gen-operations ops#)))
+
+(defn ->clj
+  "Transform a list of commands into valid clojure.
+
+   Currently only works with commands structured [:apply `f [& args]]
+
+   Example:
+
+   (def result-clj (->clj (get-in result [:shrunk :smallest])))
+   (pprint result-clj)
+   (eval result-clj)
+   "
+  [[commands] & {:keys [trace]}]
+  (letfn [(replace-var [v]
+            (if (instance? Var v)
+              (symbol (str "var" (:n v)))
+              v))
+          (->apply [[v [_ f args]]]
+            `[~v (~f ~@args)])]
+    `(let [~'var:init (open-graph)]
+       (let ~(cond->> commands
+               true (tmap replace-var)
+               true (map ->apply)
+               trace (mapcat (fn [[v c]]
+                               `[[~'_ (do (print "\n>>>>>> ") (prn '~c))]
+                                 [~v ~c]]))
+               true (apply concat)
+               true vec)
+         [~'var:init ~(replace-var (first (last commands)))]))))
