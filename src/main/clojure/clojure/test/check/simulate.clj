@@ -157,20 +157,24 @@
                          indices#)]
              (shrink-operations* sim# op-roses#)))))))
 
+(defn tmap [f c]
+  (into (or (empty c) [])
+        (map #(if (coll? %) (tmap f %) (f %)) c)))
+
+(defn prepare-command [target vars [method f args]]
+  [method f (tmap #(if (instance? Var %) (get vars %) %) args)])
+
 (defn eval-command [target vars [method f args]]
-  ; TODO:  search deeper within the structure for vars to replace.
   (let [f' (if (and (not= :custom method) (symbol? f))
              (eval f)
-             f)
-        args (mapv #(if (instance? Var %) (get vars %) %) args)]
-    [(try
+             f)]
+    (try
        (condp = method
          :apply (apply f' args)
          :-> (apply f' target args)
          :->> (apply f' (concat args [target]))
          :custom (target vars [f args]))
-       (catch Throwable t t))
-     [method f args]]))
+       (catch Throwable t t))))
 
 (defn on-error [{:keys [error cause] :as data}]
   (let [message (cond
@@ -217,6 +221,7 @@
   (assert (fn? initial-state) "Simulation must specify :initial-state function")
   (assert (fn? next-state) "Simulation must specify :next-state function")
   (let [eval-command (get sim :eval-command eval-command)
+        prepare-command (get sim :prepare-command prepare-command)
         on-error (get sim :on-error on-error)
         error? (get sim :error? error?)
         initial-target (get sim :initial-target (constantly nil))
@@ -226,25 +231,26 @@
       (let [init-target (initial-target)
             vars (atom {(Var. :init) init-target}) ]
         (reduce
-          (fn [[state target :as ignore] [v command]]
+          (fn [[state target :as ignore] [v pre-command]]
             (try
-              (let [used-vars (extract-vars command)
-                    available-vars (set (keys @vars))]
+              (let [used-vars (extract-vars pre-command)
+                    available-vars (set (keys @vars))
+                    command (prepare-command target @vars pre-command)]
                 (if (and (every? available-vars used-vars)
                          (or (not precondition)
                              (precondition state command)))
-                  (let [[result command'] (eval-command target @vars command)
-                        keep? (keep-result-var? state command' result)
-                        state' (next-state state command' result)]
+                  (let [result (eval-command target @vars command)
+                        keep? (keep-result-var? state command result)
+                        state' (next-state state command result)]
                     (try
-                      (let [failed (when postcondition (not (postcondition state' command' result)))
-                            error (error? state' command' result)]
+                      (let [failed (when postcondition (not (postcondition state' command result)))
+                            error (error? state' command result)]
                         (when keep?
                           (swap! vars assoc v result))
                         (if (or error failed)
                           (on-error {:error error :var v :vars @vars :fail operations
                                      :pre-state state :state state'
-                                     :pre-command command :command command'
+                                     :pre-command pre-command :command command
                                      :target target :result result})
                           [state' result]))
                       (catch Throwable t
@@ -252,14 +258,14 @@
                           (throw t)
                           (on-error {:var v :vars @vars :fail operations
                                      :pre-state state :state state'
-                                     :pre-command command :command command'
+                                     :pre-command pre-command :command command
                                      :target target :result result :cause t})))))
                   ignore))
               (catch Throwable t
                 (if (:state (ex-data t))
                   (throw t)
                   (on-error {:var v :vars @vars :fail operations :state state
-                             :command command :target target :cause t})))))
+                             :command pre-command :target target :cause t})))))
           [(assoc (initial-state) ::run true) init-target]
           operations)))))
 
