@@ -6,17 +6,11 @@
             [clojure.test.check.rose-tree :as rose]
             [clojure.math.combinatorics :refer [combinations]]))
 
-(defrecord Var [n]
-  gen/LiteralGenerator
-  (literal* [this] (gen/return this)))
-(defn make-var [n]
-  (Var. n))
+(defn variable [n]
+  (symbol "var" (str "v" n)))
 
-(defmethod print-method Var [{:keys [value n]} , ^Writer w]
-  (.write w (str "(V " n ")")))
-(let [^clojure.lang.MultiFn f clojure.pprint/simple-dispatch]
-  (.addMethod f Var pr))
-(def V make-var)
+(defn variable? [v]
+  (and (symbol? v) (= "var" (namespace v))))
 
 ; Simulation runs in 2 phases. First we generate command lists, then we execute
 ; them. The state machine is used during both phases, first to enable
@@ -61,7 +55,7 @@
   (let [commands (mapv (fn [[cond command]] `(when ~cond ~command)) commands)
         commands (condp = (count bindings)
                    1 `(let [~(first bindings) ~state] ~commands)
-                   2 `(let [~(first bindings) ~state ~(second bindings) (Var. :init)] ~commands)
+                   2 `(let [~(first bindings) ~state ~(second bindings) (variable :init)] ~commands)
                    (assert false "Generate commands with either [state] or [state-map initial-value-var] bindings."))]
     `(let [commands# (->> ~commands (filter identity) vec)]
        (when (seq commands#)
@@ -85,7 +79,7 @@
            (unchunk (reverse (range 1 (count items)))))])
 
 (defn extract-vars [root]
-  (filter #(instance? Var %) (tree-seq coll? seq root)))
+  (filter variable? (tree-seq coll? seq root)))
 
 (defn shrink-operations* [{:keys [initial-state precondition next-state]} op-roses]
   ; Build a custom rose tree that more effectively searches the space
@@ -95,7 +89,7 @@
   ; - understand preconditions and skip compositions with failing ones
   ; - shrink size before changing any arguments
   (let [size (count op-roses)
-        init-var (Var. :init)]
+        init-var (variable :init)]
     (->> (subsets-rose (range (count op-roses)))
          (rose/fmap
            (fn [indices]
@@ -146,7 +140,7 @@
                  indices# (rose/root (gen/call-gen gen-indices# rnd# size#))
                  [op-roses# _# _#]
                  (reduce (fn [[op-roses# state# counter#] idx#]
-                           (let [var# (make-var counter#)
+                           (let [var# (variable counter#)
                                  command# (state-command state# idx# ~bindings ~commands)
                                  operation# [var# command#]
                                  operation-rose# (gen/call-gen (gen/literal operation#) rnd# (mod size# max-op-size#))]
@@ -167,7 +161,7 @@
     c))
 
 (defn prepare-command [target vars [method f args]]
-  [method f (tmap #(if (instance? Var %) (get vars %) %) args)])
+  [method f (tmap #(if (variable? %) (get vars %) %) args)])
 
 (defn eval-command [target vars [method f args]]
   (let [f' (if (and (not= :custom method) (symbol? f))
@@ -234,7 +228,7 @@
         reduce (get sim :reduce reduce)]
     (fn [operations]
       (let [init-target (initial-target)
-            vars (atom {(Var. :init) init-target}) ]
+            vars (atom {(variable :init) init-target}) ]
         (reduce
           (fn [[state target :as ignore] [v pre-command]]
             (try
@@ -296,20 +290,25 @@
    (pprint result-clj)
    (eval result-clj)
    "
-  [[commands] & {:keys [trace]}]
+  [[commands] & {:keys [init trace]}]
   (letfn [(replace-var [v]
-            (if (instance? Var v)
-              (symbol (str "var" (:n v)))
+            (if (variable? v)
+              (symbol (name v))
               v))
           (->apply [[v [_ f args]]]
             `[~v (~f ~@args)])]
-    `(let [~'var:init (open-graph)]
-       (let ~(cond->> commands
-               true (tmap replace-var)
-               true (map ->apply)
-               trace (mapcat (fn [[v c]]
-                               `[[~'_ (do (print "\n>>>>>> ") (prn '~c))]
-                                 [~v ~c]]))
-               true (apply concat)
-               true vec)
-         [~'var:init ~(replace-var (first (last commands)))]))))
+    (let [commands
+          `(let ~(cond->> commands
+                  true (tmap replace-var)
+                  true (map ->apply)
+                  trace (mapcat (fn [[v c]]
+                                  `[[~'_ (do (print "\n>>>>>> ") (prn '~c))]
+                                    [~v ~c]]))
+                  true (apply concat)
+                  true vec)
+            ~(replace-var (first (last commands))))]
+      (if init
+        `(let [~'vinit ~init
+               ~'result ~commands]
+           [~'vinit ~'result])
+        commands))))
