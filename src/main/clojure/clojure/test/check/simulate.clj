@@ -7,10 +7,10 @@
             [clojure.math.combinatorics :refer [combinations]]))
 
 (defn variable [n]
-  (symbol "var" (str "v" n)))
+  (with-meta (symbol (str "v" n)) {::var true}))
 
 (defn variable? [v]
-  (and (symbol? v) (= "var" (namespace v))))
+  (and (symbol? v) (::var (meta v))))
 
 ; Simulation runs in 2 phases. First we generate command lists, then we execute
 ; them. The state machine is used during both phases, first to enable
@@ -151,17 +151,26 @@
                          indices#)]
              (shrink-operations* sim# op-roses#)))))))
 
-(defn tmap? [c]
-  (and (coll? c) (not (instance? clojure.lang.IRecord c))))
+(defn- isrecord?
+  "clojure.core/record? is only defined in Clojure 1.6+"
+  [x]
+  (instance? clojure.lang.IRecord x))
 
-(defn tmap [f c]
-  (if (tmap? c)
-    (into (or (empty c) [])
-          (map #(if (tmap? %) (tmap f %) (f %)) c))
+(defn tmap-empty [c]
+  (if (isrecord? c) c (or (empty c) [])))
+
+(defn tmap [recurse? apply? f c]
+  (cond
+    (recurse? c)
+    (into (tmap-empty c)
+          (map (partial tmap recurse? apply? f) c))
+    (apply? c)
+    (f c)
+    :else
     c))
 
 (defn prepare-command [target vars [method f args]]
-  [method f (tmap #(if (variable? %) (get vars %) %) args)])
+  [method f (tmap coll? variable? vars args)])
 
 (defn eval-command [target vars [method f args]]
   (let [f' (if (and (not= :custom method) (symbol? f))
@@ -291,24 +300,19 @@
    (eval result-clj)
    "
   [[commands] & {:keys [init trace]}]
-  (letfn [(replace-var [v]
-            (if (variable? v)
-              (symbol (name v))
-              v))
-          (->apply [[v [_ f args]]]
+  (letfn [(->apply [[v [_ f args]]]
             `[~v (~f ~@args)])]
     (let [commands
           `(let ~(cond->> commands
-                  true (tmap replace-var)
                   true (map ->apply)
                   trace (mapcat (fn [[v c]]
                                   `[[~'_ (do (print "\n>>>>>> ") (prn '~c))]
                                     [~v ~c]]))
                   true (apply concat)
                   true vec)
-            ~(replace-var (first (last commands))))]
+            ~(first (last commands)))]
       (if init
-        `(let [~'vinit ~init
+        `(let [~'v:init ~init
                ~'result ~commands]
-           [~'vinit ~'result])
+           [~'v:init ~'result])
         commands))))
