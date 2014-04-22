@@ -1,7 +1,7 @@
 (ns clojure.test.check.simulate-test
   (:use clojure.test)
   (:require [clojure.test.check :as tc]
-            [clojure.set :refer [map-invert]]
+            [clojure.set :as set :refer [map-invert]]
             [clojure.core.match :refer [match]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.simulate :refer [simulator gen-operations simulator*]]
@@ -67,7 +67,7 @@
 
 
 ; With size > 100, this will almost certainly fail on Clojure 1.5.1:
-(defspec transient-state-test 200 test-set)
+(defspec transient-state-test 10 test-set)
 
 (comment
 
@@ -147,3 +147,79 @@
 
   )
 
+; ====================================================
+; Test set operations with union and difference
+
+(defn make-date [n]
+  (java.util.Date. ^long (+ n 1231231212312)))
+
+(defn set2-conj [data k v]
+  (update-in data [k] conj (make-date v)))
+
+(defn set2-disj [data k v]
+  (update-in data [k] disj (make-date v)))
+
+(defn set2-union [data a b]
+  (update-in data [a] set/union (b data)))
+
+(defn set2-difference [data a b]
+  (update-in data [a] set/difference (b data)))
+
+(defn to-map [keys]
+  (reduce #(assoc %1 %2 true) {} keys))
+
+(def set2-config
+  {:initial-state
+   (fn []
+     {:a {:model [] :data #{}}
+      :b {:model [] :data #{}}})
+   :initial-target
+   (fn [] {:a #{} :b #{}})
+   :next-state
+   (fn [state [_ _ [target & _] :as command] result]
+     (let [state (assoc-in state [target :data] (target result))]
+       (match
+         command
+         [:-> `set2-conj [_k _v]]
+         (update-in state [_k :model] (comp vec distinct conj) (make-date _v))
+         [:-> `set2-disj [_k _v]]
+         (update-in state [_k :model]
+                    (fn [m d] (vec (distinct (remove #(= d %) m))))
+                    (make-date _v))
+         [:-> `set2-union [_a _b]]
+         (update-in state [_a :model]
+                    (fn [a b] (vec (distinct (concat a b))))
+                    (get-in state [_b :model]))
+         [:-> `set2-difference [_a _b]]
+         (update-in state [_a :model]
+                    (fn [a b] (vec (remove b a)))
+                    (to-map (get-in state [_b :model]))))))
+   :postcondition
+   (fn [state command result]
+     (match
+       command
+       [:-> (:or `set2-union `set2-difference) [_a _b]]
+       (= (to-map (get-in state [_a :model]))
+          (to-map (get-in state [_a :data])))
+       :else true
+   ))})
+
+(def set2
+  (letfn [(data? [{:keys [model]}] (seq model))
+          (gen-elements [{:keys [model]}] (gen/elements model))
+          ]
+    (simulator
+      set2-config
+      [{:keys [a b]}]
+      true [:-> `set2-conj [:a gen/int]]
+      true [:-> `set2-conj [:b gen/int]]
+      ;(data? a) [:-> `set2-conj [:b (gen-elements a)]]
+      ;(data? b) [:-> `set2-conj [:a (gen-elements b)]]
+      true [:-> `set2-disj [:a gen/int]]
+      true [:-> `set2-disj [:b gen/int]]
+      true [:-> `set2-union [:a :b]]
+      true [:-> `set2-union [:b :a]]
+      true [:-> `set2-difference [:a :b]]
+      true [:-> `set2-difference [:b :a]])))
+
+(defspec test-set-union-and-difference 50 set2)
