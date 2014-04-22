@@ -191,19 +191,12 @@
     (fn [rnd _size]
       (gen rnd n))))
 
-(defn add-size
-  "Create a new generator with `size` always increased by `n`."
-  [n {gen :gen}]
+(defn map-size
+  "Create a new generator with `size` always `(f n)`."
+  [f {gen :gen}]
   (make-gen
     (fn [rnd size]
-      (gen rnd (+ n size)))))
-
-(defn mod-size
-  "Create a new generator were `size` rotates through a number field of size `n`"
-  [n {gen :gen}]
-  (make-gen
-    (fn [rnd size]
-      (gen rnd (mod size n)))))
+      (gen rnd (f size)))))
 
 (defn choose
   "Create a generator that returns numbers in the range

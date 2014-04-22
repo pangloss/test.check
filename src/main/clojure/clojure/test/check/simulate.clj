@@ -130,20 +130,19 @@
     `(let [sim# ~sim
            initial-state# (:initial-state sim#)
            next-state# (:next-state sim#)
-           max-op-size# (:max-size sim# 50)]
+           max-size# (:max-size sim# 50)]
        (assert (fn? initial-state#) "Simulation must specify :initial-state function")
        (assert (fn? next-state#) "Simulation must specify :next-state function")
        (gen/make-gen
          (fn [rnd# size#]
-           (let [gen-indices# (->> gen/pos-int gen/no-shrink gen/vector gen/no-shrink
-                                   (gen/such-that not-empty))
+           (let [gen-indices# (gen/map-size #(inc (* 2 %)) (gen/vector (gen/no-shrink gen/pos-int)))
                  indices# (rose/root (gen/call-gen gen-indices# rnd# size#))
                  [op-roses# _# _#]
                  (reduce (fn [[op-roses# state# counter#] idx#]
                            (let [var# (variable counter#)
                                  command# (state-command state# idx# ~bindings ~commands)
                                  operation# [var# command#]
-                                 operation-rose# (gen/call-gen (gen/literal operation#) rnd# (mod size# max-op-size#))]
+                                 operation-rose# (gen/call-gen (gen/literal operation#) rnd# (mod size# max-size#))]
                              [(conj op-roses# operation-rose#)
                               (next-state# state# (get-command* operation-rose#) var#)
                               (inc counter#)]))
