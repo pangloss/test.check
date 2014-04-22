@@ -520,7 +520,17 @@
 (defprotocol LiteralGenerator
   (literal* [this]))
 
-(defn literal [lit]
+(defn literal
+  "Create a generator from an arbitrary data structure with generators nested within
+   it using regular clojure syntax.
+
+   Example:
+
+       (def lit (gen/literal {:coords {:x gen/int :y gen/int}}))
+       (gen/sample lit 6)
+       ;; => ({:coords {:x 0, :y 0}} {:coords {:x 0, :y -1}} {:coords {:x 0, :y -2}}
+       ;; =>  {:coords {:x -3, :y -2}} {:coords {:x 1, :y 1}} {:coords {:x 0, :y 2}})"
+  [lit]
   (cond
     (generator? lit) lit
     (satisfies? LiteralGenerator lit) (literal* lit)
@@ -530,11 +540,20 @@
     (list? lit) (fmap (partial apply list) (literal (vec lit)))
     :else (return lit)))
 
-(defn record->generator
-  ([record]
-   ; Is there a better way to do this?
-   (let [ctor (eval (read-string (str "map->" (last (clojure.string/split (str (class record)) #"\.")))))]
-     (record->generator ctor record)))
-  ([ctor record]
-   (fmap ctor (literal (into {} record)))))
+(defn literal-record
+  "Turn a record instance into a literal generator.
+
+   This is most useful as the implementation of the LiteralGenerator procotocol
+   for your record, ie:
+
+       (defrecord MyRecord [x y z]
+         gen/LiteralGenerator
+         (literal* [this] (gen/literal-record map->MyRecord this)))
+
+   Once that definition is in place, you may use the extended record anywhere inside a
+   literal generator:
+
+       (gen/literal [gen/int (->MyRecord :a gen/string {})])"
+  [map->record record]
+  (fmap map->record (literal (into {} record))))
 
